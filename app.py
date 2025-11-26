@@ -1,114 +1,158 @@
 import streamlit as st
 import pandas as pd
 
-st.title("CER Wage Tool – Indentation Proof Version")
+# -------------------------------------------------------
+# INIT
+# -------------------------------------------------------
+if "sites" not in st.session_state:
+    st.session_state.sites = {}
 
-# --- SESSION SETUP ---
-sites_exists = "sites" in st.session_state
-st.session_state.sites = st.session_state.sites if sites_exists else {}
+st.title("CER Wage Tool – Base Engine")
+st.write("This is the stable base structure for all future calculations.")
 
-# --- ADD SITE ---
+
+# -------------------------------------------------------
+# STEP 1 — ADD SITE DATA
+# -------------------------------------------------------
 st.header("Step 1: Add / Update Site")
 
-site_name = st.text_input("Site Name")
-emp_file = st.file_uploader("Employee Dump (Excel)", type=["xlsx","xls"])
-wage_file = st.file_uploader("Wage / LTS Sheet (Excel)", type=["xlsx","xls"])
+site_name = st.text_input("Site Name (Example: Rajahmundry, Nabha, etc.)")
 
-save = st.button("Save Site")
+emp_file = st.file_uploader("Upload Employee Dump (Excel)", type=["xlsx", "xls"])
+wage_file = st.file_uploader("Upload Wage / LTS Sheet (Excel)", type=["xlsx", "xls"])
 
-error_msg = (
-  "Please enter a site name." if save and site_name == "" else
-  "Please upload BOTH files." if save and site_name != "" and (emp_file is None or wage_file is None) else
-  ""
-)
+if st.button("Save Site"):
+    if site_name == "":
+        st.error("Please enter a site name.")
+    elif emp_file is None or wage_file is None:
+        st.error("Please upload BOTH employee dump and wage sheet.")
+    else:
+        try:
+            emp_df = pd.read_excel(emp_file)
+            wage_df = pd.read_excel(wage_file)
 
-st.error(error_msg) if error_msg != "" else None
+            st.session_state.sites[site_name] = {
+                "employees": emp_df,
+                "wages": wage_df
+            }
 
-save_allowed = save and error_msg == ""
+            st.success(f"Saved site: {site_name}")
+            st.write("### Employee File Preview")
+            st.dataframe(emp_df.head())
+            st.write("### Wage/LTS File Preview")
+            st.dataframe(wage_df.head())
 
-st.success("Site saved: " + site_name) if save_allowed else None
+        except Exception as e:
+            st.error(f"Error loading Excel files: {e}")
 
-if save_allowed:
-    try:
-        st.session_state.sites[site_name] = {
-            "employees": pd.read_excel(emp_file),
-            "wages": pd.read_excel(wage_file)
-        }
-    except Exception as e:
-        st.error("Excel error: " + str(e))
 
-st.write("### Sites Loaded:", list(st.session_state.sites.keys())) if len(st.session_state.sites) > 0 else st.info("No sites yet.")
+sites_list = list(st.session_state.sites.keys())
+
+if len(sites_list) > 0:
+    st.write("### Sites Loaded:", sites_list)
+else:
+    st.info("No sites added yet.")
+
 
 st.markdown("---")
 
-# --- STEP 2: TRANSACTION TYPE ---
-st.header("Step 2: Transaction")
+
+# -------------------------------------------------------
+# STEP 2 — SELECT TRANSACTION TYPE
+# -------------------------------------------------------
+st.header("Step 2: Select Transaction Type")
 
 transaction_options = [
-"Home to Home → Promotion",
-"Home to Home → New Joinee wage",
-"Home to Home → Confirmation",
-"Home to Home → Probation",
-"Home to Host → Transfer"
+    "Home to Home → Promotion",
+    "Home to Home → New Joinee wage",
+    "Home to Home → Confirmation",
+    "Home to Home → Probation",
+    "Home to Host → Transfer"
 ]
 
 transaction = st.selectbox("Transaction Type", transaction_options)
 
-st.markdown("---")
-
-# --- STEP 3: SITE SELECT ---
-st.header("Step 3: Choose Site(s)")
-
-no_sites = len(st.session_state.sites) == 0
-st.warning("Add site first.") if no_sites else None
-
-site_names = list(st.session_state.sites.keys())
-
-is_home = transaction.startswith("Home to Home")
-is_transfer = transaction.startswith("Home to Host")
-
-home_site = st.selectbox("Home Site", site_names) if not no_sites and is_home else None
-
-if not no_sites and is_transfer:
-    col1, col2 = st.columns(2)
-    home_site = col1.selectbox("Home Site", site_names, key="h1")
-    host_site = col2.selectbox("Host Site", site_names, key="h2")
-    st.success("Home: " + home_site + " → Host: " + host_site)
 
 st.markdown("---")
 
-# --- SCALE INTERPRETER ---
-st.header("Scale Interpreter")
 
-scale_str = st.text_input("Scale (e.g. 10-2-30-3-90)", "10-2-30-3-90")
-expand = st.button("Expand Scale")
+# -------------------------------------------------------
+# STEP 3 — SITE SELECTION LOGIC
+# -------------------------------------------------------
+st.header("Step 3: Select Site(s)")
 
-def expand_scale(scale):
+if len(sites_list) == 0:
+    st.warning("Please add a site first.")
+else:
+    if transaction.startswith("Home to Home"):
+        home_site = st.selectbox("Home Site", sites_list)
+        st.success(f"Home Site Selected: {home_site}")
+
+    if transaction.startswith("Home to Host"):
+        col1, col2 = st.columns(2)
+        home_site = col1.selectbox("Home Site", sites_list, key="home")
+        host_site = col2.selectbox("Host Site", sites_list, key="host")
+        st.success(f"Home: {home_site} → Host: {host_site}")
+
+
+st.markdown("---")
+
+
+# -------------------------------------------------------
+# INTERNAL BASIC SCALE INTERPRETER (NOT DISPLAYED)
+# -------------------------------------------------------
+# This interprets LTS scale strings like:
+# "10-2-30-3-90"
+# Produces internal scale list: [10,12,14,...,30,33,36...]
+def interpret_scale(scale_str):
     try:
-        nums = [int(x.strip()) for x in scale.split("-")]
-        if len(nums) < 3:
+        numbers = [int(x.strip()) for x in scale_str.split("-")]
+        if len(numbers) < 3:
             return None
-        vals = [nums[0]]
+
+        values = [numbers[0]]
+        current = numbers[0]
         i = 1
-        while i < len(nums):
-            inc = nums[i]
-            end = nums[i+1] if i+1 < len(nums) else None
+        steps = 0
+        max_steps = 2000
+
+        while i < len(numbers) and steps < max_steps:
+            inc = numbers[i]
+            end = numbers[i+1] if i+1 < len(numbers) else None
+
             if end is None:
-                vals.append(vals[-1] + inc)
+                # Only increment once — no range
+                current += inc
+                values.append(current)
                 break
-            while vals[-1] < end:
-                vals.append(vals[-1] + inc)
+
+            # Increment until reaching the end point
+            while current < end:
+                current += inc
+                values.append(current)
+                steps += 1
+                if steps >= max_steps:
+                    break
+
             i += 2
-        return vals
+
+        return values
+
     except:
         return None
 
-vals = expand_scale(scale_str) if expand else None
 
-st.success("Scale Expanded:") if expand and vals else None
-st.error("Invalid scale format.") if expand and vals is None else None
-st.write(vals) if expand and vals else None
+# NOTE: This function is intentionally NOT shown to the user.
+# It will be used for:
+# - Grade fitment checks
+# - Promotion logic
+# - New joinee validation
+# - Transfer wage fitment (Home vs Host)
+# - Red flag warnings
+
+
+st.success("Internal scale interpretation engine is ready (not displayed).")
+
 
 st.markdown("---")
-
-st.info("🎉 This version avoids ALL indentation and will always run.")
+st.info("Base system running. Now ready to add full transaction logic.")
